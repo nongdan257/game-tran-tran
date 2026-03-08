@@ -1,0 +1,246 @@
+﻿@page "/"
+@using System.Timers
+@implements IDisposable
+
+<style>
+    .sidebar, .top-row { display: none !important; }
+    .main > div { padding: 0 !important; }
+    .content { padding: 0 !important; }
+    @@keyframes levelUpAnim { 0% { transform: scale(0.5); opacity: 0; } 50% { transform: scale(1.3); opacity: 1; } 100% { transform: scale(1); opacity: 0; } }
+    @@keyframes shake { 0% { transform: translate(1px, 1px); } 10% { transform: translate(-2px, -1px); } 100% { transform: translate(1px, -2px); } }
+    .skill-btn { padding: 10px; border: 2px solid white; border-radius: 10px; color: white; cursor: pointer; font-weight: bold; font-size: 0.8rem; margin: 0 5px; min-width: 80px; }
+    
+    .control-btn {
+        position: absolute;
+        bottom: 15%;
+        width: 65px;
+        height: 65px;
+        background: rgba(255, 255, 255, 0.2);
+        border: 3px solid #4FC3F2;
+        border-radius: 50%;
+        color: white;
+        font-size: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+        cursor: pointer;
+        user-select: none;
+        backdrop-filter: blur(5px);
+        transition: transform 0.1s;
+        touch-action: none;
+    }
+    .control-btn:active { background: rgba(79, 195, 242, 0.6); transform: scale(0.85); }
+    .btn-left { left: 5%; }
+    .btn-right { right: 5%; }
+
+    @@media (orientation: portrait) {
+        .landscape-warning { display: block; }
+        .control-btn { bottom: 5%; width: 50px; height: 50px; font-size: 20px; }
+    }
+    @@media (orientation: landscape) {
+        .landscape-warning { display: none; }
+    }
+    
+    body { overflow: hidden; position: fixed; width: 100%; height: 100%; background: #1A237E; }
+</style>
+
+<div @onkeydown="HandleKeyDown" @onkeyup="HandleKeyUp" @ontouchmove="HandleTouchMove" tabindex="0" autofocus 
+     style="outline: none; background: linear-gradient(#1A237E, #4FC3F2); height: 100vh; width: 100vw; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white; touch-action: none;">
+    
+    <div class="landscape-warning" style="position: absolute; top: 0; width: 100%; background: #F44336; color: white; text-align: center; padding: 5px; z-index: 999; font-weight: bold;">
+        📱 Hãy xoay ngang điện thoại để chơi mượt nhất nhé!
+    </div>
+
+    @if (!isGameOver)
+    {
+        <div style="text-align: center; margin-bottom: 5px; z-index: 20; margin-top: 20px;">
+            <h1 style="font-size: 1.5rem; font-weight: bold; margin: 0;">ĐIỂM: @score | TẦNG: @currentLevel / 10</h1>
+            <div style="display: flex; justify-content: center; margin-top: 5px;">
+                @if (canSlow) { <button class="skill-btn" style="background: #FF9800;" @onclick="UseSlow">🐢 CHẬM (3)</button> }
+                @if (canLong) { <button class="skill-btn" style="background: #2196F3;" @onclick="UseLong">📏 DÀI (2)</button> }
+                @if (canAntiBomb) { <button class="skill-btn" style="background: #F44336;" @onclick="UseAntiBomb">💥 PHÁ BOM</button> }
+            </div>
+        </div>
+
+        <div id="game-container" style="position: relative; width: 95vw; max-width: 800px; aspect-ratio: 16/9; background: rgba(255,255,255,0.15); border: 3px solid white; border-radius: 15px; overflow: hidden; box-shadow: 0 0 20px rgba(79, 195, 242, 0.5);">
+            @if (isTransitioning)
+            {
+                <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 100; text-align: center; animation: levelUpAnim 1.5s forwards;">
+                    <h1 style="font-size: 4rem; color: #FFEB3B; text-shadow: 0 0 20px orange;">LEVEL UP!</h1>
+                    <h2 style="font-size: 2rem;">VÀO TẦNG @currentLevel</h2>
+                </div>
+            }
+
+            @foreach (var b in allBalls) {
+                <div style="position: absolute; width: @(b.Size)%; aspect-ratio: 1/1; background: gold; border-radius: 50%; border: 1px solid white; left: @(b.X)%; top: @(b.Y)%; z-index: 10;"></div>
+            }
+
+            @foreach (var item in activeItems) {
+                <div style="position: absolute; width: @(item.W)%; height: @(item.H)%; background: @item.Color; border: 1px solid white; border-radius: @(item.Radius)%; left: @(item.X)%; top: @(item.Y)%; display: flex; align-items: center; justify-content: center; z-index: 11; font-size: 1.2rem;">@item.Icon</div>
+            }
+            
+            <div style="position: absolute; width: @(paddleWidth)%; height: 5%; background: #0D47A1; border-radius: 10px; border: 2px solid #4FC3F2; left: @(playerX)%; top: 90%; transform: rotate(@(paddleRotation)deg); transition: width 0.3s, transform 0.1s;"></div>
+        </div>
+
+        <div class="control-btn btn-left" 
+             @onmousedown="() => isMovingLeft = true" @onmouseup="() => isMovingLeft = false" @onmouseleave="() => isMovingLeft = false"
+             @ontouchstart="() => isMovingLeft = true" @ontouchend="() => isMovingLeft = false">◀</div>
+
+        <div class="control-btn btn-right" 
+             @onmousedown="() => isMovingRight = true" @onmouseup="() => isMovingRight = false" @onmouseleave="() => isMovingRight = false"
+             @ontouchstart="() => isMovingRight = true" @ontouchend="() => isMovingRight = false">▶</div>
+    }
+    else
+    {
+        <div style="text-align: center; animation: shake 0.5s infinite;">
+            <img src="https://i.imgur.com/G4Ysh6W.jpeg" style="width: 250px; border-radius: 20px; border: 5px solid white;" />
+            <h1 style="font-size: 5rem; color: #FF5252; font-weight: bold; margin: 10px 0;">NON!</h1>
+            <p style="background: white; color: black; padding: 5px 15px; border-radius: 5px;">@(currentLevel == 10 && score >= 100 ? "BẠN KHÔNG THỂ THẮNG TẦNG 10!" : $"Thất bại tại Tầng {currentLevel}")</p>
+            <br/><button @onclick="RestartGame" style="margin-top: 20px; padding: 15px 40px; font-size: 1.5rem; background: #4CAF50; color: white; border: none; border-radius: 10px;">THỬ LẠI</button>
+        </div>
+    }
+</div>
+
+@code {
+    class Ball { public double X, Y, SX, SY, Size; }
+    class FallingItem { public double X, Y, W, H; public int Radius; public string Color, Icon, Type; }
+
+    List<Ball> allBalls = new List<Ball>();
+    List<FallingItem> activeItems = new List<FallingItem>();
+    double playerX = 40, paddleWidth = 20, defaultBallSize = 4, paddleRotation = 0, currentSpeedMultiplier = 1;
+    int score = 0, currentLevel = 1;
+    bool isGameOver = false, isTransitioning = false;
+    bool canSlow = true, canLong = true, canAntiBomb = true;
+    int slowTurns = 0, longTurns = 0;
+    
+    // Điều khiển và logic trick
+    bool isMovingLeft = false;
+    bool isMovingRight = false;
+    bool isTrickActive = true; // Biến giám sát trick lỏ
+
+    Timer? gameTimer;
+    Random rand = new Random();
+
+    protected override void OnInitialized() {
+        RestartGame();
+        gameTimer = new Timer(16); 
+        gameTimer.Elapsed += (s, e) => { if(!isGameOver && !isTransitioning) UpdateGame(); InvokeAsync(StateHasChanged); };
+        gameTimer.Start();
+    }
+
+    void UpdateGame() {
+        if (longTurns == 0) {
+            if (isMovingLeft) playerX = Math.Max(0, playerX - 1.5);
+            if (isMovingRight) playerX = Math.Min(100 - paddleWidth, playerX + 1.5);
+        }
+
+        if (currentLevel >= 2 && rand.Next(1, 40) == 1) paddleRotation = rand.Next(-30, 31);
+
+        int spawnRate = currentLevel == 10 ? 30 : Math.Max(50, 400 - (currentLevel * 40));
+        if (rand.Next(1, spawnRate) == 1) 
+            activeItems.Add(new FallingItem { X = rand.Next(5, 95), Y = 0, W = 4, H = 6, Type = "STONE", Color = "#9E9E9E", Icon = "🪨", Radius = 20 });
+
+        foreach (var b in allBalls.ToList()) {
+            b.X += b.SX; b.Y += b.SY;
+            if (b.X <= 0 || b.X + b.Size >= 100) b.SX = -b.SX;
+            if (b.Y <= 0) b.SY = -b.SY;
+
+            // XỬ LÝ VA CHẠM VỚI VÁN TRƯỢT
+            if (b.Y + b.Size >= 90 && b.Y + b.Size <= 95 && b.X + b.Size >= playerX && b.X <= playerX + paddleWidth) {
+                b.SY = -Math.Abs(b.SY);
+                if (paddleRotation != 0) b.SX += (paddleRotation / 8);
+                
+                // ĐIỀU KIỆN TRICK LỎ KHIẾT KHAO
+                if (isTrickActive && score <= -2) {
+                    score = 101; // Ăn gian thành công!
+                } else {
+                    score++;
+                    isTrickActive = false; // Phá game ngay lập tức nếu lỡ đỡ được bóng trước khi điểm chạm -2
+                }
+
+                if (slowTurns > 0) { slowTurns--; if (slowTurns == 0) ApplySpeed(currentSpeedMultiplier); }
+                if (longTurns > 0) { longTurns--; if (longTurns == 0) paddleWidth = 20; }
+
+                if (score >= 100) { 
+                    if (currentLevel < 10) StartLevelTransition(); 
+                    else isGameOver = true; 
+                    return; 
+                }
+                
+                if (score % 5 == 0) SpawnItem(); 
+            }
+            // KHI RỚT BÓNG XUỐNG VỰC
+            if (b.Y > 100) { 
+                allBalls.Remove(b); 
+                if (allBalls.Count == 0) { 
+                    score--; 
+                    if (score < -2) isGameOver = true; 
+                    else SpawnMainBall(); 
+                } else score--; 
+            }
+        }
+
+        foreach (var item in activeItems.ToList()) {
+            item.Y += (0.7 + (currentLevel * 0.15));
+            if (item.Y + item.H >= 90 && item.Y <= 95 && item.X + item.W >= playerX && item.X <= playerX + paddleWidth) {
+                if (item.Type == "BOMB") { if (score < 20) isGameOver = true; else score -= 20; }
+                else if (item.Type == "STONE") StartShake();
+                else ApplyEffect(item.Type);
+                activeItems.Remove(item);
+            }
+            if (item.Y > 100) activeItems.Remove(item);
+        }
+    }
+
+    void UseSlow() { canSlow = false; slowTurns = 3; foreach(var b in allBalls) { b.SX *= 0.35; b.SY *= 0.35; } }
+    void UseLong() { canLong = false; longTurns = 2; paddleWidth = 100; playerX = 0; }
+    void UseAntiBomb() { canAntiBomb = false; activeItems.Clear(); }
+
+    void SpawnItem() {
+        int r = rand.Next(1, 4);
+        var item = new FallingItem { X = rand.Next(10, 80), Y = 0, W = 7, H = 7, Radius = 0 };
+        if (r == 1) { item.Type = "GIFT"; item.Color = "#FFEB3B"; item.Icon = "🎁"; }
+        else if (r == 2) { item.Type = "BOMB"; item.Color = "#333"; item.Icon = "💣"; item.Radius = 50; }
+        else { item.Type = "MONEY"; item.Color = "#4CAF50"; item.Icon = "💰"; }
+        activeItems.Add(item);
+    }
+
+    void ApplySpeed(double mul) {
+        currentSpeedMultiplier = mul;
+        foreach(var b in allBalls) { b.SX = (b.SX > 0 ? 0.5 : -0.5) * mul; b.SY = -0.6 * mul; }
+    }
+
+    async void StartShake() { paddleRotation = rand.Next(0, 2) == 0 ? 30 : -30; await Task.Delay(1500); paddleRotation = 0; }
+    void ApplyEffect(string type) { if (type == "GIFT") { for (int i = 0; i < 2; i++) allBalls.Add(new Ball { X = playerX + (paddleWidth/2), Y = 85, SX = (rand.NextDouble() - 0.5) * 5, SY = -1.8, Size = defaultBallSize }); } else if (type == "MONEY") score += 10; }
+
+    void StartLevelTransition() { 
+        isTransitioning = true; currentLevel++; score = 0; 
+        isMovingLeft = false; isMovingRight = false; 
+        isTrickActive = true; // Reset lại biến trick cho màn mới
+        allBalls.Clear(); activeItems.Clear(); 
+        defaultBallSize = Math.Max(1.0, 4.0 - (currentLevel * 0.4)); 
+        Task.Delay(1800).ContinueWith(_ => { isTransitioning = false; SpawnMainBall(); InvokeAsync(StateHasChanged); }); 
+    }
+
+    void SpawnMainBall() { 
+        var b = new Ball { X = 45, Y = 10, SX = 0.5, SY = 0.6, Size = defaultBallSize }; 
+        allBalls.Add(b); 
+        ApplySpeed(1.0 + (currentLevel * 0.4)); 
+    }
+
+    void RestartGame() { 
+        score = 0; currentLevel = 1; defaultBallSize = 4; currentSpeedMultiplier = 1; 
+        canSlow = canLong = canAntiBomb = true; slowTurns = longTurns = 0; 
+        isMovingLeft = false; isMovingRight = false;
+        isTrickActive = true; // Bật lại trick khi chơi ván mới
+        allBalls.Clear(); activeItems.Clear(); isGameOver = false; isTransitioning = false; 
+        SpawnMainBall(); 
+    }
+
+    void HandleTouchMove(TouchEventArgs e) { if (longTurns > 0) return; playerX = (e.TargetTouches[0].ClientX / (8.0)) - (paddleWidth / 2); playerX = Math.Clamp(playerX, 0, 100 - paddleWidth); }
+    void HandleKeyDown(KeyboardEventArgs e) { if (e.Key == "ArrowLeft") isMovingLeft = true; if (e.Key == "ArrowRight") isMovingRight = true; }
+    void HandleKeyUp(KeyboardEventArgs e) { if (e.Key == "ArrowLeft") isMovingLeft = false; if (e.Key == "ArrowRight") isMovingRight = false; }
+
+    public void Dispose() => gameTimer?.Dispose();
+}
